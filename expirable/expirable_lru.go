@@ -4,6 +4,7 @@
 package expirable
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -118,18 +119,40 @@ func (c *LRU[K, V]) Purge() {
 // Returns false if there was no eviction: the item was already in the cache,
 // or the size was not exceeded.
 func (c *LRU[K, V]) Add(key K, value V) (evicted bool) {
+	var err error
+	evicted, err = c.Swap(key, value, nil)
+	if err != nil {
+		panic(fmt.Errorf("Swap must not produce an error if the check is nil: %w", err)) // this should not be possible
+	}
+	return
+}
+
+// Swap performs an add operation as a compare-and-swap. If the key exists in
+// the cache the check operation is performed; if it fails, the update fails. If
+// the key does not exist in the cache or if the check operation succeeds the
+// swap value is associated with the key.
+//
+// Other than the check operation, Swap works identically to Add, which is
+// itself implemented using Swap and a nil check.
+func (c *LRU[K, V]) Swap(key K, value V, check func(prev, curr V) error) (evicted bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
 
 	// Check for existing item
 	if ent, ok := c.items[key]; ok {
+		if check != nil {
+			err := check(ent.Value, value)
+			if err != nil {
+				return false, err
+			}
+		}
 		c.evictList.MoveToFront(ent)
 		c.removeFromBucket(ent) // remove the entry from its current bucket as expiresAt is renewed
 		ent.Value = value
 		ent.ExpiresAt = now.Add(c.ttl)
 		c.addToBucket(ent)
-		return false
+		return false, nil
 	}
 
 	// Add new item
@@ -142,7 +165,7 @@ func (c *LRU[K, V]) Add(key K, value V) (evicted bool) {
 	if evict {
 		c.removeOldest()
 	}
-	return evict
+	return evict, nil
 }
 
 // Get looks up a key's value from the cache.

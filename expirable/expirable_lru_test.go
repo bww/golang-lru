@@ -5,6 +5,7 @@ package expirable
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -574,4 +575,67 @@ func TestCache_EvictionSameKey(t *testing.T) {
 	if !reflect.DeepEqual(evictedKeys, want) {
 		t.Errorf("evictedKeys got: %v want: %v", evictedKeys, want)
 	}
+}
+
+func TestCache_Swap(t *testing.T) {
+	l := NewLRU[int64, int64](8192, nil, 0)
+	casErr := errors.New("Compare failed")
+	var err error
+
+	// the key does not exist and so this check is not performed
+	_, err = l.Swap(1, 1, func(prev, curr int64) error {
+		return casErr // this would fail if it ran...
+	})
+	if err != nil {
+		t.Errorf("Swap failed: %v", err)
+		return
+	}
+	if v, _ := l.Get(1); v != 1 {
+		t.Errorf("Swap: expected: %v, got: %v", 1, v)
+		return
+	}
+
+	// the check should pass and this update should succeed
+	_, err = l.Swap(1, 2, func(prev, curr int64) error {
+		if prev != 1 {
+			return casErr
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("Swap failed: %v", err)
+		return
+	}
+	if v, _ := l.Get(1); v != 2 {
+		t.Errorf("Swap: expected: %v, got: %v", 2, v)
+		return
+	}
+
+	// the check should fail and this update should not be performed
+	_, err = l.Swap(1, 3, func(prev, curr int64) error {
+		if prev != 1 {
+			return casErr
+		}
+		return nil
+	})
+	if err != casErr {
+		t.Errorf("Swap: expected error: %v, got: %v", casErr, err)
+		return
+	}
+	if v, _ := l.Get(1); v != 2 {
+		t.Errorf("Swap: expected: %v, got: %v", 2, v)
+		return
+	}
+
+	// the check is nil, so it is not performed
+	_, err = l.Swap(1, 0, nil)
+	if err != nil {
+		t.Errorf("Swap failed: %v", err)
+		return
+	}
+	if v, _ := l.Get(1); v != 0 {
+		t.Errorf("Swap: expected: %v, got: %v", 0, v)
+		return
+	}
+
 }
